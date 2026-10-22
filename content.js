@@ -22,9 +22,16 @@
     isLoading: false,
     autoSolveOnFocus: false,
     isMinimized: false,
-    lastScrapedHash: "",
-    answersCache: new Map() // Caches answers by question title
+    loadingKey: null,
+    answersCache: new Map()
   };
+
+  const questionIds = new WeakMap();
+  let nextQuestionId = 0;
+  function questionKey(question) {
+    if (!questionIds.has(question.container)) questionIds.set(question.container, ++nextQuestionId);
+    return JSON.stringify([questionIds.get(question.container), question.title, question.subtitle, question.type, question.options]);
+  }
 
   let shadowRoot = null;
   let hostElement = null;
@@ -59,8 +66,8 @@
     hostElement = document.createElement("div");
     hostElement.id = "gform-ai-overlay-host";
     
-    // Mount to documentElement so it persists across body mutations & works in full screen
-    document.documentElement.appendChild(hostElement);
+    const parent = document.fullscreenElement || document.documentElement;
+    parent.appendChild(hostElement);
     shadowRoot = hostElement.attachShadow({ mode: "open" });
   }
 
@@ -88,6 +95,7 @@
       bottom: 24px;
       right: 24px;
       width: 360px;
+      max-width: calc(100vw - 16px);
       background: rgba(15, 20, 28, 0.94);
       backdrop-filter: blur(16px);
       -webkit-backdrop-filter: blur(16px);
@@ -767,6 +775,8 @@
    * Handles modern and classic layouts, radio buttons, checkboxes, dropdowns, and text fields.
    */
   function scrapeQuestions() {
+    const previousQuestion = state.questions[state.activeIndex];
+    const previousKey = previousQuestion ? questionKey(previousQuestion) : null;
     const scraped = [];
 
     // Find all question blocks in the form
@@ -805,7 +815,8 @@
       let questionType = "text";
 
       // A. Check for Radio Buttons (Multiple Choice)
-      const radioGroup = node.querySelector('div[role="radiogroup"]');
+      // A grid contains multiple answers per block; do not flatten it into one question.
+      if (node.querySelectorAll('div[role="radiogroup"]').length > 1) return;
       const radioNodes = node.querySelectorAll('div[role="radio"]');
       if (radioNodes && radioNodes.length > 0) {
         questionType = "radio";
@@ -867,7 +878,7 @@
         }
       }
 
-      if (titleText.length > 0) {
+      if (titleText.length > 0 && (options.length > 0 || optionElements.length > 0)) {
         scraped.push({
           index: index + 1,
           container: node,
@@ -881,6 +892,8 @@
     });
 
     state.questions = scraped;
+    const retainedIndex = scraped.findIndex(question => questionKey(question) === previousKey);
+    if (retainedIndex >= 0) state.activeIndex = retainedIndex;
 
     // Adjust active index if out of range
     if (state.activeIndex >= state.questions.length) {
@@ -927,10 +940,10 @@
 
     // Render Options Preview
     if (current.options && current.options.length > 0) {
-      const cached = state.answersCache.get(current.title);
+      const cached = state.answersCache.get(questionKey(current));
       optionsList.innerHTML = current.options.map((opt, i) => {
         const bullet = current.type === "radio" ? "○" : (current.type === "checkbox" ? "□" : "•");
-        const isMatch = cached && cached.matchedIndex === i;
+        const isMatch = cached && cached.matchedIndices.includes(i);
         return `
           <div class="option-item ${isMatch ? 'highlighted' : ''}">
             <span class="option-bullet">${bullet}</span>
@@ -945,10 +958,12 @@
     }
 
     // Check if we have a cached answer for this question
-    const cachedAnswer = state.answersCache.get(current.title);
-    if (cachedAnswer && !state.isLoading) {
-      renderAnswerSuccess(cachedAnswer.answer, cachedAnswer.matchedIndex);
-    } else if (!state.isLoading) {
+    const cachedAnswer = state.answersCache.get(questionKey(current));
+    if (state.isLoading && state.loadingKey === questionKey(current)) {
+      resultContainer.innerHTML = '<div class="loading-state"><div class="spinner"></div><div class="loading-text">Consulting LLM...</div></div>';
+    } else if (cachedAnswer) {
+      renderAnswerSuccess(cachedAnswer, current);
+    } else {
       resultContainer.innerHTML = "";
     }
   }
@@ -956,131 +971,93 @@
   // --- TRIGGER GET ANSWER VIA BACKGROUND SERVICE WORKER ---
 
   async function triggerGetAnswer() {
-    if (state.questions.length === 0 || state.isLoading) return;
-
+    if (!state.questions.length || state.isLoading) return;
     const current = state.questions[state.activeIndex];
-    const resultContainer = shadowRoot.getElementById("resultContainer");
-    const getAnswerBtn = shadowRoot.getElementById("getAnswerBtn");
-
+    const key = questionKey(current);
     state.isLoading = true;
-    getAnswerBtn.disabled = true;
-
-    // Display "Thinking..." spinner
-    resultContainer.innerHTML = `
-      <div class="loading-state">
-        <div class="spinner"></div>
-        <div class="loading-text">Consulting LLM...</div>
-      </div>
-    `;
-
+    state.loadingKey = key;
+    updateUI();
+    let error = null;
     try {
       const response = await sendRuntimeMessage({
         action: "GET_ANSWER",
         data: {
-          questionText: current.title + (current.subtitle ? `\nDetails: ${current.subtitle}` : ""),
+          questionText: current.title + (current.subtitle ? '\nDetails: ' + current.subtitle : ''),
           options: current.options,
           questionType: current.type
         }
       });
-
-      state.isLoading = false;
-      getAnswerBtn.disabled = false;
-
-      if (response && response.success) {
-        // Cache answer
-        state.answersCache.set(current.title, {
-          answer: response.answer,
-          matchedIndex: response.matchedIndex,
-          modelUsed: response.modelUsed,
-          sessionRequests: response.sessionRequests
-        });
-
-        renderAnswerSuccess(
-          response.answer, 
-          response.matchedIndex, 
-          response.modelUsed, 
-          response.sessionRequests, 
-          response.tierSwitched
-        );
-        updateUI();
-
-        // Update footer model badge & request count
-        const statusIndicator = shadowRoot.getElementById("statusIndicator");
-        if (statusIndicator && response.modelUsed) {
-          const shortName = response.modelUsed.replace("gemini-", "").replace("-flash", " Flash");
-          statusIndicator.textContent = `${shortName} (#${response.sessionRequests || 1}/40)`;
-          statusIndicator.style.color = "#38bdf8";
-        }
-
-        // Highlight matching option in Google Form
-        if (response.matchedIndex >= 0 && current.optionElements[response.matchedIndex]) {
-          highlightFormElement(current.optionElements[response.matchedIndex]);
-        }
-      } else {
-        renderError(response?.error || "Failed to retrieve an answer from the LLM.");
-      }
+      if (!response?.success) throw new Error(response?.error || 'Failed to retrieve an answer.');
+      state.answersCache.set(key, response);
     } catch (err) {
+      error = err.message || 'An unexpected error occurred.';
+    } finally {
       state.isLoading = false;
-      getAnswerBtn.disabled = false;
-      renderError(err.message || "An unexpected error occurred.");
+      state.loadingKey = null;
+      updateUI();
+      const active = state.questions[state.activeIndex];
+      if (active && questionKey(active) === key) {
+        if (error) renderError(error);
+      } else if (active && state.autoSolveOnFocus) {
+        triggerGetAnswer();
+      }
     }
   }
 
-  /**
-   * Renders the clean answer card in the Shadow DOM overlay.
-   */
-  function renderAnswerSuccess(answerText, matchedIndex, modelUsed, sessionRequests, tierSwitched) {
+  function renderAnswerSuccess(result, question) {
+    const { answer, matchedIndices, modelUsed, sessionRequests, tierSwitched } = result;
     const resultContainer = shadowRoot.getElementById("resultContainer");
-    const displayModel = modelUsed || "gemini-3.5-flash-lite";
-
+    const key = questionKey(question);
     resultContainer.innerHTML = `
       <div class="answer-container">
-        ${tierSwitched ? `
-          <div style="background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.35); border-radius: 6px; padding: 5px 8px; font-size: 10px; color: #fbbf24; margin-bottom: 8px; line-height: 1.3;">
-            ⚡ Lower tier quota limit reached → Seamlessly rolled over to <strong>${escapeHtml(displayModel)}</strong>
-          </div>
-        ` : ''}
+        ${tierSwitched ? '<div class="hint-text">Used another available model.</div>' : ''}
         <div class="answer-header">
-          <div class="answer-badge">Correct Answer</div>
+          <div class="answer-badge">Suggested Answer</div>
           <button id="copyAnswerBtn" class="copy-btn">📋 Copy</button>
         </div>
-        <div class="answer-content">${escapeHtml(answerText)}</div>
-        ${matchedIndex >= 0 ? `
-          <button id="selectOptionBtn" class="form-sync-btn">
-            <span>✓ Highlight & Select in Form</span>
-          </button>
-        ` : ''}
-        <div style="font-size: 10px; color: #94a3b8; display: flex; justify-content: space-between; margin-top: 8px; border-top: 1px solid rgba(255, 255, 255, 0.06); padding-top: 6px;">
-          <span>Model: <strong style="color: #a78bfa;">${escapeHtml(displayModel)}</strong></span>
-          <span>Req: <strong style="color: #38bdf8;">${sessionRequests || 1} / 40</strong></span>
+        <div class="answer-content">${escapeHtml(answer)}</div>
+        ${matchedIndices.length ? '<button id="selectOptionBtn" class="form-sync-btn">✓ Highlight & Select in Form</button>' : ''}
+        <div style="font-size: 10px; color: #94a3b8; margin-top: 8px;">
+          Model: <strong>${escapeHtml(modelUsed)}</strong> · Successful answers: ${sessionRequests}
         </div>
       </div>
     `;
-
-    // Copy to clipboard
+    const statusIndicator = shadowRoot.getElementById("statusIndicator");
+    statusIndicator.textContent = modelUsed + ' (#' + sessionRequests + ')';
     const copyBtn = shadowRoot.getElementById("copyAnswerBtn");
-    if (copyBtn) {
-      copyBtn.addEventListener("click", () => {
-        navigator.clipboard.writeText(answerText).then(() => {
-          copyBtn.textContent = "✓ Copied!";
-          setTimeout(() => {
-            copyBtn.textContent = "📋 Copy";
-          }, 2000);
-        });
-      });
-    }
-
-    // Select in form button
-    const selectOptionBtn = shadowRoot.getElementById("selectOptionBtn");
-    if (selectOptionBtn && matchedIndex >= 0) {
-      selectOptionBtn.addEventListener("click", () => {
-        const current = state.questions[state.activeIndex];
-        if (current && current.optionElements[matchedIndex]) {
-          const targetElem = current.optionElements[matchedIndex];
-          highlightFormElement(targetElem);
-          targetElem.click();
-          selectOptionBtn.textContent = "✓ Selected in Form";
+    copyBtn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(answer);
+        copyBtn.textContent = '✓ Copied!';
+      } catch (err) {
+        renderError('Could not copy the answer: ' + err.message);
+      }
+    });
+    const selectBtn = shadowRoot.getElementById("selectOptionBtn");
+    if (selectBtn && matchedIndices.length) {
+      selectBtn.addEventListener("click", () => {
+        const active = state.questions[state.activeIndex];
+        if (!active || questionKey(active) !== key || !active.container.isConnected) {
+          renderError('The form changed. Rescan and request a new answer.');
+          return;
         }
+        if (active.type === 'checkbox') {
+          active.optionElements.forEach((element, index) => {
+            const wanted = matchedIndices.includes(index);
+            if ((element.getAttribute('aria-checked') === 'true') !== wanted) element.click();
+            if (wanted) highlightFormElement(element);
+          });
+        } else {
+          const target = active.optionElements[matchedIndices[0]];
+          if (!target?.isConnected) {
+            renderError('The option is no longer available. Rescan the form.');
+            return;
+          }
+          if (active.type === 'dropdown') active.container.querySelector('[role="listbox"]').click();
+          target.click();
+          highlightFormElement(target);
+        }
+        selectBtn.textContent = '✓ Selected in Form';
       });
     }
   }
@@ -1112,7 +1089,7 @@
     // Apply temporary glowing highlight
     const originalTransition = element.style.transition;
     const originalBoxShadow = element.style.boxShadow;
-    const originalBorder = element.style.border;
+    const originalBorderRadius = element.style.borderRadius;
 
     element.style.transition = "all 0.3s ease";
     element.style.boxShadow = "0 0 0 3px #10b981, 0 4px 12px rgba(16, 185, 129, 0.4)";
@@ -1121,7 +1098,7 @@
     setTimeout(() => {
       element.style.boxShadow = originalBoxShadow;
       element.style.transition = originalTransition;
-      element.style.border = originalBorder;
+      element.style.borderRadius = originalBorderRadius;
     }, 3000);
   }
 
@@ -1141,9 +1118,9 @@
     observer = new MutationObserver(() => {
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
-        const previousTotal = state.questions.length;
+        const previousQuestions = JSON.stringify(state.questions.map(questionKey));
         scrapeQuestions();
-        if (state.questions.length !== previousTotal) {
+        if (JSON.stringify(state.questions.map(questionKey)) !== previousQuestions) {
           updateUI();
         }
       }, 350);
@@ -1191,9 +1168,8 @@
 
     // Fullscreen support: ensure our host remains attached and visible
     document.addEventListener("fullscreenchange", () => {
-      if (!document.contains(hostElement)) {
-        document.documentElement.appendChild(hostElement);
-      }
+      const parent = document.fullscreenElement || document.documentElement;
+      if (hostElement.parentElement !== parent) parent.appendChild(hostElement);
     });
   }
 
