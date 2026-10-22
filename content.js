@@ -789,6 +789,10 @@
     }
 
     questionNodes.forEach((node, index) => {
+      // Google Forms also gives each checkbox option role="listitem".
+      // Only outer question blocks belong in the question navigator.
+      if (node.parentElement.closest('div[role="listitem"]')) return;
+
       // 1. Extract Question Title
       let titleElem = node.querySelector('div[role="heading"], [aria-level="3"], .M7eMe, .freebirdFormviewerComponentsQuestionBaseTitle');
       if (!titleElem) {

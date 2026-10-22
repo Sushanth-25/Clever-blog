@@ -30,7 +30,19 @@ test('content overlay handles cache isolation, sections, checkbox selection, met
       option.setAttribute('aria-checked', 'false');
       option.textContent = text;
       option.onclick = () => option.setAttribute('aria-checked', option.getAttribute('aria-checked') === 'true' ? 'false' : 'true');
-      node.appendChild(option);
+      if (type === 'checkbox') {
+        const wrapper = document.createElement('div');
+        wrapper.setAttribute('role', 'listitem');
+        const label = document.createElement('span');
+        label.setAttribute('dir', 'auto');
+        label.textContent = text;
+        option.textContent = '';
+        option.appendChild(label);
+        wrapper.appendChild(option);
+        node.appendChild(wrapper);
+      } else {
+        node.appendChild(option);
+      }
     }
     fixture.appendChild(node);
     return node;
@@ -72,8 +84,9 @@ test('content overlay handles cache isolation, sections, checkbox selection, met
     fixture.replaceChildren();
     const checkbox = question('All primes', ['2', '3', '4'], 'checkbox'); await pause(450);
     check(el('questionTitle').textContent.includes('All primes'), 'same-sized section refresh');
+    check(el('navCounter').textContent === 'Question 1 of 1', 'nested checkbox items are not counted as questions');
     el('getAnswerBtn').click(); reply('2\\n3', [0, 1]); await pause(0);
-    checkbox.children[3].click(); // Pre-existing incorrect checkbox must be cleared.
+    checkbox.querySelectorAll('[role="checkbox"]')[2].click(); // Pre-existing incorrect checkbox must be cleared.
     el('selectOptionBtn').click();
     const checked = () => Array.from(checkbox.querySelectorAll('[role="checkbox"]')).map(option => option.getAttribute('aria-checked'));
     check(JSON.stringify(checked()) === JSON.stringify(['true', 'true', 'false']), 'all correct checkboxes selected');
