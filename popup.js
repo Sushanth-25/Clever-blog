@@ -1,22 +1,3 @@
-/**
- * Google Forms AI Assistant - Settings Popup Controller
- */
-
-// Model options per provider ordered strictly from lowest tier to highest tier (Gemini 3+ only)
-const MODELS_BY_PROVIDER = {
-  gemini: [
-    { value: "gemini-3.5-flash-lite", label: "Tier 1: Gemini 3.5 Flash Lite (Lowest Gemini 3 - 500 RPD!)" },
-    { value: "gemini-3.1-flash-lite", label: "Tier 1b: Gemini 3.1 Flash Lite (500 RPD)" },
-    { value: "gemini-3-flash", label: "Tier 2: Gemini 3 Flash (20 RPD)" },
-    { value: "gemini-3.6-flash", label: "Tier 3: Gemini 3.6 Flash (20 RPD)" },
-    { value: "gemini-3.8-flash", label: "Tier 4: Gemini 3.8 Flash (Highest Tier - 20 RPD)" }
-  ],
-  openai: [
-    { value: "gpt-4o-mini", label: "gpt-4o-mini (Fast & Affordable - Recommended)" },
-    { value: "gpt-4o", label: "gpt-4o (High Performance)" }
-  ]
-};
-
 const PROVIDER_HINTS = {
   gemini: 'Get a free Gemini API key at <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer">Google AI Studio ↗</a>',
   openai: 'Get an OpenAI API key at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">OpenAI Platform ↗</a>'
@@ -82,7 +63,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const currentProvider = result.provider || "gemini";
     providerSelect.value = currentProvider;
 
-    const currentModel = result.model || "gemini-3.5-flash-lite";
+    const currentModel = result.model || MODELS_BY_PROVIDER[currentProvider][0].value;
     updateModelDropdown(currentProvider, currentModel);
 
     if (autoRolloverCheck) {
@@ -91,7 +72,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     if (reqCounter) {
       const count = result.sessionRequests || 0;
-      reqCounter.textContent = `${count} / 40`;
+      reqCounter.textContent = `${count}`;
     }
 
     if (result.apiKey) {
@@ -105,8 +86,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Reset Session Counter
   if (resetSessionBtn) {
     resetSessionBtn.addEventListener("click", () => {
-      chrome.runtime.sendMessage({ action: "RESET_SESSION_COUNT" }, () => {
-        if (reqCounter) reqCounter.textContent = "0 / 40";
+      chrome.runtime.sendMessage({ action: "RESET_SESSION_COUNT" }, (response) => {
+        if (chrome.runtime.lastError) {
+          showAlert(chrome.runtime.lastError.message, "error");
+          return;
+        }
+        if (!response?.success) {
+          showAlert(response?.error || "Could not reset the counter.", "error");
+          return;
+        }
+        if (reqCounter) reqCounter.textContent = "0";
         showAlert("Session request counter reset to 0.", "success");
       });
     });
@@ -143,6 +132,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     chrome.storage.local.set({ apiKey, provider, model, autoRollover }, () => {
       saveBtn.disabled = false;
+      if (chrome.runtime.lastError) {
+        saveBtn.textContent = "Save Key";
+        showAlert(chrome.runtime.lastError.message, "error");
+        return;
+      }
       saveBtn.innerHTML = "<span>✓ Saved!</span>";
       updateStatusBadge(true);
       showAlert(`Saved! Active Model: ${model}.`, "success");
@@ -184,10 +178,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         if (response && response.success) {
           showAlert(response.message || "Connection verified successfully!", "success");
           
-          if (response.activeModel && response.activeModel !== model) {
-            updateModelDropdown(provider, response.activeModel);
-            chrome.storage.local.set({ model: response.activeModel });
-          }
+          // Testing never changes persisted provider, model, or key.
         } else {
           showAlert(response?.error || "Test failed. Please check your API key.", "error");
         }

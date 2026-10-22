@@ -1,87 +1,90 @@
-# Google Forms AI Assistant (Chrome Extension - Manifest V3)
+# Google Forms AI Assistant
 
-A real-time AI assistant Chrome Extension built with **Manifest V3** that detects and parses Google Forms questions, queries an LLM API (Google Gemini or OpenAI) using strict prompt engineering, and renders exact, clean answers directly inside a sleek, draggable floating overlay with complete **Shadow DOM isolation**.
+A Chrome extension (Manifest V3) that reads Google Forms questions and requests suggested answers from Google Gemini or OpenAI. Answers appear in a draggable overlay on the form page.
 
----
+## Installation
 
-## 📁 Project Architecture & File Structure
-
-```
-clever-borg/
-├── manifest.json       # Manifest V3 configuration, permissions & content script matchers
-├── background.js      # Service worker for secure LLM API queries and key storage
-├── content.js         # Content script: Shadow DOM UI, DOM scraper, MutationObserver
-├── popup.html         # Settings popup UI for API key & provider configuration
-├── popup.js           # Popup controller for storage management and connection testing
-├── icons/             # Extension action & store icons
-│   ├── icon16.png
-│   ├── icon32.png
-│   ├── icon48.png
-│   └── icon128.png
-└── README.md          # Documentation & usage guide
-```
-
----
-
-## 🚀 Key Features
-
-1. **Manifest V3 Compliant**: Uses modern background service workers, `chrome.storage.local`, and granular permissions.
-2. **Shadow DOM Isolation**: The floating UI lives inside an isolated Shadow Root (`attachShadow({ mode: 'open' })`), completely immune to Google Forms CSS conflicts and ensuring zero style leakage.
-3. **Draggable & Minimizable Glassmorphism UI**:
-   - Modern dark mode aesthetic with backdrop blur (`rgba(15, 20, 28, 0.94)`).
-   - Draggable across the screen with mouse coordinates clamped to the viewport.
-   - Minimizable to a floating compact pill (`⚡ Form AI`) that never blocks form inputs.
-   - Remains visible in fullscreen mode (`position: fixed; z-index: 2147483647;`).
-4. **Intelligent DOM Scraper**:
-   - Accurately parses Radio buttons (Multiple Choice), Checkboxes (Multiple Answers), Dropdowns, and Short Answer / Paragraph fields.
-   - Resilient multi-tier selector fallbacks (`role="listitem"`, `.Qr7Oae`, `.M7eMe`, etc.).
-5. **Real-time `MutationObserver`**:
-   - Automatically tracks page transitions, section changes ("Next" / "Back" buttons), and dynamic form rendering with debouncing.
-6. **Strict System Prompt & Response Cleansing**:
-   - Enforces test-taking assistant rules returning **only** the exact matching option text without markdown bolding, quotes, or filler explanations.
-7. **In-Form Visual Highlighting**:
-   - Displays the clean answer in the floating window.
-   - One-click copy to clipboard.
-   - "Highlight & Select in Form" button scrolls directly to the question and marks the correct option with a glowing green ring!
-
----
-
-## 🛠️ Step-by-Step Installation Instructions
-
-### Step 1: Open Chrome Extensions
-1. Launch **Google Chrome**.
-2. Navigate to `chrome://extensions/` in the address bar.
-3. Toggle on **Developer mode** in the top right corner.
-
-### Step 2: Load the Unpacked Extension
-1. Click the **Load unpacked** button in the top left corner.
-2. Select the directory containing these files:
+1. Clone this repository, or download and extract it from GitHub. Access to the repository is required if it is private:
+   ```sh
+   git clone git@github.com:Sushanth-25/Clever-blog.git
+   cd Clever-blog
    ```
-   c:\Users\susha\Documents\antigravity\clever-borg
-   ```
-3. The **Google Forms AI Assistant** card will appear with its purple/cyan badge.
+2. Open `chrome://extensions/` in Google Chrome and enable **Developer mode**.
+3. Click **Load unpacked** and select the repository folder containing `manifest.json`. No build step or package installation is required.
+4. Pin **Google Forms AI Assistant** using Chrome's Extensions menu, then click its icon to open settings.
+5. Choose a provider and model, enter a key for that provider, and click **Save Key**. Keys can be created in [Google AI Studio](https://aistudio.google.com/app/apikey) or [OpenAI Platform](https://platform.openai.com/api-keys).
+6. Click **Test Key** to make a real API request with the settings shown in the popup. Testing checks exactly the chosen model, never falls back, and never changes saved settings. Click **Save Key** after changing settings.
+7. Open or reload a Google Form at `https://docs.google.com/forms/...`.
 
-### Step 3: Pin the Extension & Enter API Key
-1. Click the Chrome toolbar **puzzle icon** (Extensions) and pin **Google Forms AI Assistant**.
-2. Click the extension icon to open the Settings popup.
-3. Choose your provider:
-   - **Google Gemini** *(Recommended - Free API key available at [Google AI Studio](https://aistudio.google.com/app/apikey))*.
-   - **OpenAI** *(Optional - Available at [OpenAI Platform](https://platform.openai.com/api-keys))*.
-4. Paste your API key into the field.
-5. Click **"Save Key"**, then click **"⚡ Test Key"** to verify the connection.
+Model access, billing, and quotas depend on the provider and account. The shared Gemini allowlist in `models.js` contains only models that returned generated text with the supplied review key on October 22, 2026. No key is included in the source. Use **Test Key** to check current access with your own key. If upgrading from an older version, open settings and save a model from the updated list.
 
----
+## Usage
 
-## 🧪 Testing on Google Forms
+- Click a form question or use the overlay's **◀ / ▶** buttons to choose a detected question.
+- Click **Get Answer** to request a suggestion. **Auto-solve on click** is off by default; when enabled, changing the active question by clicking, focusing, or using the arrows requests an answer.
+- Use **Copy** to copy the answer. When an option is matched, **Highlight & Select in Form** clicks that option. Review the suggestion before selecting it; AI answers and option matching can be incorrect.
+- Text answers can be copied but are not automatically entered into form fields. The extension does not submit forms.
+- Drag the header to move the overlay, click **—** to minimize it, or click the minimized header to expand it. Closing with **✕** hides it until the page is reloaded.
+- Use **Rescan** if the displayed questions do not match the current form section.
 
-1. Open any active Google Form (e.g., `https://docs.google.com/forms/d/e/.../viewform`).
-2. Notice the sleek floating **Form Assist AI** widget in the bottom-right corner.
-3. **Navigating Questions**:
-   - Click on any question in the Google Form, or use the `◀` and `▶` arrows in the overlay.
-4. **Getting Answers**:
-   - Click **"✨ Get Answer"**.
-   - The widget will display a thinking spinner and return the exact option.
-   - Click **"✓ Highlight & Select in Form"** to automatically highlight and pick the answer!
-5. **Moving / Minimizing**:
-   - Drag the header bar to reposition the widget anywhere on your screen.
-   - Click `—` to collapse it into a floating bubble when you want more screen space.
+## Verified Gemini models
+
+These model IDs returned HTTP 200 with generated text during the live check:
+
+| Model ID | Included |
+| --- | --- |
+| `gemini-3.5-flash-lite` | Yes, default |
+| `gemini-3-flash-preview` | Yes |
+| `gemini-3.5-flash` | Yes |
+| `gemini-3.6-flash` | Yes |
+
+The old `gemini-3-flash` ID returned 404. The tested 2.5 models returned 404 because they were unavailable to this key. Pro models returned 429 with zero free-tier quota. `gemini-3.1-flash-lite`, its preview, and `gemini-3.8-flash` returned 503 during testing and are excluded because generation could not be verified. A 503 indicates temporary unavailability, not proof that the key lacks permission. Model listing alone is not treated as proof of working generation. Moving `latest` aliases are omitted in favor of explicit model IDs.
+
+Availability can change between requests, including for models that passed. See [Google's model catalog](https://ai.google.dev/gemini-api/docs/models) and [rate limits](https://ai.google.dev/gemini-api/docs/rate-limits).
+
+## Behavior and limitations
+
+- The scraper detects radio buttons, checkboxes, dropdown options, and text fields using Google Forms DOM selectors. Changes to Google's markup can break detection. Images and other non-text question content are not sent to the model. Multi-row radio grids are skipped rather than flattened into a single question; other grid types are not supported.
+- Checkbox answers use a JSON array of exact option texts. Selecting an answer checks every matched option and clears other checked options. Repeated selection preserves that state. Invalid or ambiguous checkbox answers show an error rather than choosing a partial match.
+- Single-choice matching requires a unique, case-insensitive exact option label after limited formatting cleanup. Exact labels are preserved before cleanup, including numbers such as `1.5`. Unmatched answers can be copied but cannot be selected automatically.
+- Answers are cached per question element, title, description, type, and options. Form changes refresh the overlay even when the number of questions stays the same. Responses arriving after navigation are cached for their original question.
+- Optional Gemini fallback tries later entries in the shared allowlist on HTTP 404, 429, 503, or a request timeout. It does not change your saved model. A selected model near the end of the list has fewer fallback candidates. Connection testing always checks only the selected model.
+- **Successful answers** counts completed, parsed answer responses across tabs. It persists until manually reset and excludes connection tests and failed requests. It is not a provider usage meter or quota: failed requests and retries may still consume provider resources. The extension makes no fixed daily-quota claims.
+- The overlay uses Shadow DOM for style isolation and moves inside the fullscreen element when fullscreen changes. Text answers are copied manually, and forms are never submitted automatically.
+
+## Data and permissions
+
+The API key and settings are stored in `chrome.storage.local`; the extension does not implement encryption for the key. Each answer request sends the selected question's title, description (when detected), and text options to the chosen provider. Enabling auto-solve sends requests as the active question changes. There is no application server in this repository.
+
+The manifest declares `storage` and `activeTab` permissions, plus host access to Google Forms and the Gemini and OpenAI API domains. The content script runs on matching `docs.google.com/forms/*` pages. Only use the extension with form content you are authorized to share with the selected provider.
+
+## Files
+
+```text
+Clever-blog/
+├── manifest.json   # Extension configuration and permissions
+├── background.js   # API requests, fallback, answer matching, and counters
+├── models.js       # Shared provider model allowlist
+├── content.js      # Form scraping, overlay, answer cache, and option selection
+├── popup.html      # Settings interface
+├── popup.js        # Settings persistence and connection testing
+├── icons/          # Extension icons (16, 32, 48, and 128 pixels)
+├── tests/          # Worker regressions and headless Chrome UI checks
+└── README.md
+```
+
+## Development checks
+
+No package installation or build step is needed. With a current Node.js release (22+ recommended), run:
+
+```sh
+node --check background.js
+node --check content.js
+node --check popup.js
+node --check models.js
+node --test tests/*.test.cjs
+```
+
+After changes, reload the extension in `chrome://extensions/` and reload the form tab. Check the popup, service worker, and form-page consoles when troubleshooting. Syntax checks alone do not validate Chrome integration, Google Forms selectors, or live API access.
+
+Worker tests use mocked API/storage boundaries and require no API key. Browser tests run the real content script against a local fixture using an isolated headless Chrome profile. They use the standard macOS Chrome path or `google-chrome` on other systems; set `CHROME_PATH` for a different executable. Browser tests are skipped when Chrome is absent. The fixtures do not validate live Google Forms markup or authenticated OpenAI access.
