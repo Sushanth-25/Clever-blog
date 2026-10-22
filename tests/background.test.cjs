@@ -116,7 +116,7 @@ test('successful connection tests also leave counters and settings untouched', a
 });
 test('model allowlist rejects the invalid alias and unavailable models before calling API', async () => {
   const app = worker();
-  for (const model of ['gemini-3-flash', 'gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gpt-4o-mini']) {
+  for (const model of ['gemini-3-flash', 'gemini-2.5-flash', 'gemini-1.5-flash', 'gpt-4o-mini']) {
     app.store.model = model;
     assert.equal((await app.message({ action: 'GET_ANSWER', data: question })).success, false);
   }
