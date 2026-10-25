@@ -23,6 +23,7 @@
     autoSolveOnFocus: false,
     isMinimized: false,
     loadingKey: null,
+    batch: null,
     answersCache: new Map()
   };
 
@@ -74,6 +75,7 @@
   // --- STYLES FOR SHADOW DOM ---
 
   const styles = `
+    [hidden] { display: none !important; }
     * {
       box-sizing: border-box;
       margin: 0;
@@ -576,6 +578,12 @@
             <span>✨ Get Answer</span>
           </button>
 
+          <button id="fillAllBtn" class="action-btn" style="margin-top: 8px;">Answer & fill all</button>
+          <div style="font-size: 11px; color: #94a3b8; margin-top: 6px;">Current section · does not submit</div>
+          <button id="stopFillBtn" class="form-sync-btn" hidden>Stop</button>
+          <div id="batchStatus" role="status" aria-live="polite" style="font-size: 11px; margin-top: 8px;"></div>
+          <ul id="batchIssues" style="font-size: 11px; color: #fbbf24; padding-left: 16px;"></ul>
+
           <!-- Dynamic Output Container (Answer / Spinner / Error) -->
           <div id="resultContainer"></div>
         </div>
@@ -627,6 +635,7 @@
     // Close / Hide
     closeBtn.addEventListener("click", (e) => {
       e.stopPropagation();
+      if (state.batch?.running) state.batch.stopRequested = true;
       overlayPanel.style.display = "none";
     });
 
@@ -662,6 +671,11 @@
     // Get Answer
     getAnswerBtn.addEventListener("click", () => {
       triggerGetAnswer();
+    });
+    shadowRoot.getElementById('fillAllBtn').addEventListener('click', fillAllAnswers);
+    shadowRoot.getElementById('stopFillBtn').addEventListener('click', () => {
+      state.batch.stopRequested = true;
+      updateUI();
     });
 
     // Auto-solve toggle
@@ -921,6 +935,19 @@
     const resultContainer = shadowRoot.getElementById("resultContainer");
 
     const total = state.questions.length;
+    const batchRunning = Boolean(state.batch?.running);
+    shadowRoot.getElementById('fillAllBtn').disabled = total === 0 || state.isLoading || batchRunning;
+    const stopBtn = shadowRoot.getElementById('stopFillBtn');
+    stopBtn.hidden = !batchRunning;
+    stopBtn.disabled = Boolean(state.batch?.stopRequested);
+    shadowRoot.getElementById('rescanBtn').disabled = batchRunning;
+    shadowRoot.getElementById('autoSolveCheck').disabled = batchRunning;
+    const batch = state.batch;
+    shadowRoot.getElementById('batchStatus').textContent = batch
+      ? `${batch.stopRequested && batch.running ? 'Stopping after the current request…' : batch.message} ${batch.completed}/${batch.total} processed · ${batch.filled} filled · ${batch.issues.length} skipped.`
+      : '';
+    shadowRoot.getElementById('batchIssues').innerHTML = batch
+      ? batch.issues.map(issue => `<li>${escapeHtml(issue)}</li>`).join('') : '';
 
     if (total === 0) {
       navCounter.textContent = "No questions found";
@@ -935,9 +962,9 @@
 
     const current = state.questions[state.activeIndex];
     navCounter.textContent = `Question ${state.activeIndex + 1} of ${total}`;
-    prevBtn.disabled = state.activeIndex === 0;
-    nextBtn.disabled = state.activeIndex === total - 1;
-    getAnswerBtn.disabled = state.isLoading;
+    prevBtn.disabled = batchRunning || state.activeIndex === 0;
+    nextBtn.disabled = batchRunning || state.activeIndex === total - 1;
+    getAnswerBtn.disabled = state.isLoading || batchRunning;
 
     // Set Question text
     questionTitle.textContent = `${state.activeIndex + 1}. ${current.title}`;
@@ -974,30 +1001,39 @@
 
   // --- TRIGGER GET ANSWER VIA BACKGROUND SERVICE WORKER ---
 
-  async function triggerGetAnswer() {
-    if (!state.questions.length || state.isLoading) return;
-    const current = state.questions[state.activeIndex];
-    const key = questionKey(current);
+  async function requestAnswer(question) {
+    const key = questionKey(question);
     state.isLoading = true;
     state.loadingKey = key;
     updateUI();
-    let error = null;
     try {
       const response = await sendRuntimeMessage({
         action: "GET_ANSWER",
         data: {
-          questionText: current.title + (current.subtitle ? '\nDetails: ' + current.subtitle : ''),
-          options: current.options,
-          questionType: current.type
+          questionText: question.title + (question.subtitle ? '\nDetails: ' + question.subtitle : ''),
+          options: question.options,
+          questionType: question.type
         }
       });
       if (!response?.success) throw new Error(response?.error || 'Failed to retrieve an answer.');
       state.answersCache.set(key, response);
-    } catch (err) {
-      error = err.message || 'An unexpected error occurred.';
+      return response;
     } finally {
       state.isLoading = false;
       state.loadingKey = null;
+    }
+  }
+
+  async function triggerGetAnswer() {
+    if (!state.questions.length || state.isLoading || state.batch?.running) return;
+    const current = state.questions[state.activeIndex];
+    const key = questionKey(current);
+    let error = null;
+    try {
+      await requestAnswer(current);
+    } catch (err) {
+      error = err.message || 'An unexpected error occurred.';
+    } finally {
       updateUI();
       const active = state.questions[state.activeIndex];
       if (active && questionKey(active) === key) {
@@ -1005,6 +1041,112 @@
       } else if (active && state.autoSolveOnFocus) {
         triggerGetAnswer();
       }
+    }
+  }
+
+  async function applyAnswer(question, result) {
+    const current = state.questions.find(item => questionKey(item) === questionKey(question));
+    if (!current?.container.isConnected) throw new Error('The form changed. Rescan and request a new answer.');
+    if (current.type === 'short_answer' || current.type === 'paragraph') {
+      const field = current.optionElements[0];
+      if (!field?.isConnected || field.matches(':disabled') || field.readOnly || field.getAttribute('aria-disabled') === 'true') {
+        throw new Error('The text field is unavailable or read-only.');
+      }
+      if (field.isContentEditable) {
+        field.textContent = result.answer;
+      } else {
+        const prototype = field.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        Object.getOwnPropertyDescriptor(prototype, 'value').set.call(field, result.answer);
+      }
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+      field.dispatchEvent(new Event('change', { bubbles: true }));
+      highlightFormElement(field);
+      return;
+    }
+    if (!result.matchedIndices.length) throw new Error('The answer did not uniquely match an option.');
+    if (current.optionElements.some(element => !element.isConnected || element.getAttribute('aria-disabled') === 'true')) {
+      throw new Error('An option is no longer available. Rescan the form.');
+    }
+    if (current.type === 'checkbox') {
+      current.optionElements.forEach((element, index) => {
+        const wanted = result.matchedIndices.includes(index);
+        if ((element.getAttribute('aria-checked') === 'true') !== wanted) element.click();
+        if (wanted) highlightFormElement(element);
+      });
+    } else if (current.type === 'radio') {
+      const target = current.optionElements[result.matchedIndices[0]];
+      if (target.getAttribute('aria-checked') !== 'true') target.click();
+      highlightFormElement(target);
+    } else if (current.type === 'dropdown') {
+      const listbox = current.container.querySelector('[role="listbox"]');
+      listbox.click();
+      // Let the menu's click handler finish without depending on animation frames
+      // (which can be suspended in background tabs).
+      await new Promise(resolve => setTimeout(resolve, 0));
+      if (state.batch?.running && state.batch.stopRequested) return;
+      const wanted = current.options[result.matchedIndices[0]];
+      const target = Array.from(current.container.querySelectorAll('[role="option"]')).find(option =>
+        (option.getAttribute('data-value') || option.innerText).trim() === wanted && option.getClientRects().length > 0);
+      if (!target) throw new Error('The dropdown option is unavailable.');
+      target.click();
+      highlightFormElement(target);
+    } else {
+      throw new Error('This question type cannot be filled automatically.');
+    }
+  }
+
+  async function fillAllAnswers() {
+    if (state.isLoading || state.batch?.running) return;
+    scrapeQuestions();
+    if (!state.questions.length) return;
+    const questions = [...state.questions];
+    const signature = JSON.stringify(questions.map(questionKey));
+    const batch = state.batch = {
+      running: true, stopRequested: false, total: questions.length,
+      completed: 0, filled: 0, issues: [], message: 'Filling current section.'
+    };
+    const sectionUnchanged = () => {
+      scrapeQuestions();
+      return JSON.stringify(state.questions.map(questionKey)) === signature;
+    };
+    try {
+      for (const [index, question] of questions.entries()) {
+        if (batch.stopRequested) break;
+        if (!sectionUnchanged()) { batch.message = 'Form changed; stopped.'; break; }
+        state.activeIndex = index;
+        updateUI();
+        let result = state.answersCache.get(questionKey(question));
+        if (!result) {
+          try {
+            result = await requestAnswer(question);
+          } catch (error) {
+            batch.issues.push(`${index + 1}. ${question.title}: ${error.message}`);
+            batch.completed++;
+            batch.message = 'Request failed; stopped. You can retry.';
+            break;
+          }
+        }
+        if (batch.stopRequested) break;
+        if (!sectionUnchanged()) { batch.message = 'Form changed; stopped.'; break; }
+        try {
+          await applyAnswer(question, result);
+          if (batch.stopRequested) break;
+          batch.filled++;
+        } catch (error) {
+          batch.issues.push(`${index + 1}. ${question.title}: ${error.message}`);
+        }
+        batch.completed++;
+        updateUI();
+        // Keep progress and Stop responsive even when every answer is cached.
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+      if (batch.stopRequested) batch.message = 'Stopped.';
+      else if (batch.completed === batch.total) batch.message = 'Finished current section.';
+    } catch (error) {
+      batch.message = `Stopped: ${error.message}`;
+    } finally {
+      batch.running = false;
+      updateUI();
     }
   }
 
@@ -1039,29 +1181,19 @@
     });
     const selectBtn = shadowRoot.getElementById("selectOptionBtn");
     if (selectBtn && matchedIndices.length) {
-      selectBtn.addEventListener("click", () => {
+      selectBtn.disabled = Boolean(state.batch?.running);
+      selectBtn.addEventListener("click", async () => {
         const active = state.questions[state.activeIndex];
         if (!active || questionKey(active) !== key || !active.container.isConnected) {
           renderError('The form changed. Rescan and request a new answer.');
           return;
         }
-        if (active.type === 'checkbox') {
-          active.optionElements.forEach((element, index) => {
-            const wanted = matchedIndices.includes(index);
-            if ((element.getAttribute('aria-checked') === 'true') !== wanted) element.click();
-            if (wanted) highlightFormElement(element);
-          });
-        } else {
-          const target = active.optionElements[matchedIndices[0]];
-          if (!target?.isConnected) {
-            renderError('The option is no longer available. Rescan the form.');
-            return;
-          }
-          if (active.type === 'dropdown') active.container.querySelector('[role="listbox"]').click();
-          target.click();
-          highlightFormElement(target);
+        try {
+          await applyAnswer(question, result);
+          selectBtn.textContent = '✓ Selected in Form';
+        } catch (error) {
+          renderError(error.message);
         }
-        selectBtn.textContent = '✓ Selected in Form';
       });
     }
   }
@@ -1142,6 +1274,7 @@
   function setupGlobalEventListeners() {
     // When user clicks anywhere inside the Google Form
     document.addEventListener("click", (e) => {
+      if (state.batch?.running) return;
       // Ignore clicks inside our own shadow host
       if (hostElement && hostElement.contains(e.target)) return;
 
@@ -1158,6 +1291,7 @@
 
     // Focus events for form inputs
     document.addEventListener("focusin", (e) => {
+      if (state.batch?.running) return;
       if (hostElement && hostElement.contains(e.target)) return;
 
       const questionIndex = state.questions.findIndex(q => q.container && q.container.contains(e.target));
