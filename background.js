@@ -1,5 +1,5 @@
-/** Service worker: provider requests, exact option matching, and answer counters. */
-importScripts('models.js');
+/** Shared background logic for Chrome's worker and Firefox's event page. */
+const extensionApi = typeof browser === 'undefined' ? chrome : browser;
 
 const SYSTEM_INSTRUCTION =
   'Answer the supplied question accurately. Follow the requested response format exactly. Do not add explanations or markdown.';
@@ -9,21 +9,21 @@ let counterUpdates = Promise.resolve();
 function updateCounters(model) {
   const pending = counterUpdates.then(async () => {
     if (!model) {
-      await chrome.storage.local.set({ sessionRequests: 0, modelRequests: {} });
+      await extensionApi.storage.local.set({ sessionRequests: 0, modelRequests: {} });
       return 0;
     }
-    const config = await chrome.storage.local.get(['sessionRequests', 'modelRequests']);
+    const config = await extensionApi.storage.local.get(['sessionRequests', 'modelRequests']);
     const sessionRequests = (config.sessionRequests || 0) + 1;
     const modelRequests = config.modelRequests || {};
     modelRequests[model] = (modelRequests[model] || 0) + 1;
-    await chrome.storage.local.set({ sessionRequests, modelRequests });
+    await extensionApi.storage.local.set({ sessionRequests, modelRequests });
     return sessionRequests;
   });
   counterUpdates = pending.catch(() => {}); // One storage failure must not poison the queue.
   return pending;
 }
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+extensionApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
   let task;
   switch (message.action) {
     case 'GET_ANSWER':
@@ -36,7 +36,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       task = updateCounters().then(() => ({ success: true }));
       break;
     case 'CHECK_KEY_STATUS':
-      task = chrome.storage.local.get(['apiKey', 'provider', 'model', 'sessionRequests', 'autoRollover'])
+      task = extensionApi.storage.local.get(['apiKey', 'provider', 'model', 'sessionRequests', 'autoRollover'])
         .then(config => ({
           hasKey: Boolean(config.apiKey?.trim()),
           provider: config.provider || 'gemini',
@@ -65,7 +65,7 @@ function selectedModel(provider, model) {
 async function handleGetAnswer(data) {
   const { questionText, options = [], questionType } = data || {};
   if (!questionText?.trim()) throw new Error('No question text was provided.');
-  const config = await chrome.storage.local.get(['apiKey', 'provider', 'model', 'autoRollover']);
+  const config = await extensionApi.storage.local.get(['apiKey', 'provider', 'model', 'autoRollover']);
   const apiKey = config.apiKey?.trim();
   if (!apiKey) throw new Error('API key is missing. Open extension settings and save your API key.');
   const provider = config.provider || 'gemini';

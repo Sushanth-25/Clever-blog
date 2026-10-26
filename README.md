@@ -1,8 +1,8 @@
 # Google Forms AI Assistant
 
-A Chrome extension (Manifest V3) that reads Google Forms questions and requests suggested answers from Google Gemini or OpenAI. Answers appear in a draggable overlay on the form page.
+A browser extension for Chrome 121+ and desktop Firefox 140+ (Manifest V3) that reads Google Forms questions and requests suggested answers from Google Gemini or OpenAI. Answers appear in a draggable overlay on the form page.
 
-## Installation
+## Installation in Chrome
 
 1. Clone this repository, or download and extract it from GitHub. Access to the repository is required if it is private:
    ```sh
@@ -17,6 +17,21 @@ A Chrome extension (Manifest V3) that reads Google Forms questions and requests 
 7. Open or reload a Google Form at `https://docs.google.com/forms/...`.
 
 Model access, billing, and quotas depend on the provider and account. The shared Gemini allowlist in `models.js` contains only models that returned generated text with the supplied review key on October 22, 2026. No key is included in the source. Use **Test Key** to check current access with your own key. If upgrading from an older version, open settings and save a model from the updated list.
+
+## Installation in Firefox
+
+Use the same repository checkout; there is no separate Firefox build or JavaScript bundle.
+
+1. Open `about:debugging#/runtime/this-firefox` in desktop Firefox 140 or later.
+2. Click **Load Temporary Add-on…** and select this repository's `manifest.json`.
+3. Open the extension popup, save your provider key and model, then use **Test Key**. Chrome's saved settings are not automatically copied into Firefox.
+4. Open or reload a Google Form. Verify the overlay, copying, manual selection, and **Answer & fill all**. Host access must be enabled for Google Forms and your selected provider in the browser's extension permissions.
+
+A temporary add-on is removed when Firefox restarts. Permanent installation requires a Mozilla-signed XPI, distributed through Firefox Add-ons (AMO) or signed for self-distribution. This repository does not yet include a signed release. Firefox for Android is not claimed or tested by this change.
+
+The shared manifest uses `background-worker.js` for Chrome and ordered `background.scripts` for Firefox. The shared background logic uses native Promise APIs (`browser` when present, otherwise `chrome`); popup and content-script callbacks use Firefox's supported `chrome` compatibility namespace. No runtime polyfill is required.
+
+Firefox's stable add-on ID is `@clever-blog.sushanth-25`. Confirm this ID before first signing; published updates must keep the same ID. Firefox 140 is the minimum so Mozilla's built-in data-transmission consent is available. See [PRIVACY.md](PRIVACY.md) for the form content and credential data sent to providers.
 
 ## Usage
 
@@ -65,13 +80,15 @@ The manifest declares `storage` and `activeTab` permissions, plus host access to
 ```text
 Clever-blog/
 ├── manifest.json   # Extension configuration and permissions
-├── background.js   # API requests, fallback, answer matching, and counters
+├── background.js   # Shared API requests, fallback, answer matching, and counters
+├── background-worker.js # Chrome service-worker startup
 ├── models.js       # Shared provider model allowlist
 ├── content.js      # Form scraping, overlay, answer cache, and option selection
 ├── popup.html      # Settings interface
 ├── popup.js        # Settings persistence and connection testing
 ├── icons/          # Extension icons (16, 32, 48, and 128 pixels)
 ├── tests/          # Worker regressions and headless Chrome UI checks
+├── PRIVACY.md      # Provider transmission and local storage disclosure
 └── README.md
 ```
 
@@ -87,6 +104,22 @@ node --check models.js
 node --test tests/*.test.cjs
 ```
 
-After changes, reload the extension in `chrome://extensions/` and reload the form tab. Check the popup, service worker, and form-page consoles when troubleshooting. Syntax checks alone do not validate Chrome integration, Google Forms selectors, or live API access.
+After changes, reload the extension in `chrome://extensions/` (Chrome) or `about:debugging` (Firefox), then reload the form tab. Check the popup, service worker, and form-page consoles when troubleshooting. Syntax checks alone do not validate Chrome integration, Google Forms selectors, or live API access.
 
 Worker tests use mocked API/storage boundaries and require no API key. Browser tests run the real content script against a local fixture using an isolated headless Chrome profile. They use the standard macOS Chrome path or `google-chrome` on other systems; set `CHROME_PATH` for a different executable. Browser tests are skipped when Chrome is absent. The fixtures do not validate live Google Forms markup or authenticated OpenAI access.
+
+## Firefox validation and distribution
+
+Mozilla's development tool can be used without installing project dependencies:
+
+```sh
+npx --yes web-ext lint --config web-ext-config.cjs
+npx --yes web-ext run --config web-ext-config.cjs
+npx --yes web-ext build --config web-ext-config.cjs
+```
+
+The config excludes tests and development documentation from the package. Build output goes to the ignored `web-ext-artifacts/` directory. The generated ZIP is unsigned and is not a permanent-installable release. Lint warns that Firefox ignores the Chrome service-worker key; the ordered background scripts are the intended fallback. Existing escaped HTML templates also produce manual-review warnings. No Firefox for Android support is advertised, despite the linter's Android version warning.
+
+For the opt-in native Gecko smoke test, set `FIREFOX_BINARY` to the Firefox executable and `WEB_EXT_BIN` to the `web-ext` executable, then run `node --test tests/firefox.test.cjs`. It creates an isolated temporary extension/profile, points only that test copy at a loopback form, supplies fake API responses, and checks native messaging, storage, radio/checkbox selection, and text filling. It does not use real credentials or a personal browser profile. The test skips if its tooling is not configured.
+
+For release: validate in release Firefox, review the data-transmission disclosure and privacy policy, package the extension, then submit it to [Firefox Add-ons](https://addons.mozilla.org/developers/) for signing and optional listing. Keep the extension ID stable and increment `version` for updates. See Mozilla's [cross-browser background guidance](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/manifest.json/background#cross-browser_manifest_v3_background_scripts), [built-in consent requirements](https://extensionworkshop.com/documentation/develop/firefox-builtin-data-consent/), and [signing overview](https://extensionworkshop.com/documentation/publish/signing-and-distribution-overview/).
