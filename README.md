@@ -23,7 +23,9 @@ Model access, billing, and quotas depend on the provider and account. The shared
 - Click a form question or use the overlay's **◀ / ▶** buttons to choose a detected question.
 - Click **Get Answer** to request a suggestion. **Auto-solve on click** is off by default; when enabled, changing the active question by clicking, focusing, or using the arrows requests an answer.
 - Use **Copy** to copy the answer. When an option is matched, **Highlight & Select in Form** clicks that option. Review the suggestion before selecting it; AI answers and option matching can be incorrect.
-- Text answers can be copied but are not automatically entered into form fields. The extension does not submit forms.
+- Click **Answer & fill all** to request and apply answers sequentially for every detected question in the **current section**, including text fields. Cached answers are reused. Progress shows filled and skipped questions, with reasons for skipped answers. This can replace existing responses in that section.
+- Click **Stop** to end a batch. An API request already sent may finish and be cached, but its answer will not be applied after Stop. A failed request or a change to the question list stops the batch. Unmatched options and unavailable controls are skipped.
+- The extension does not click **Next** or **Submit**. Move to the next section yourself and run **Answer & fill all** again. Single-question **Get Answer**, copying, and manual option selection remain available.
 - Drag the header to move the overlay, click **—** to minimize it, or click the minimized header to expand it. Closing with **✕** hides it until the page is reloaded.
 - Use **Rescan** if the displayed questions do not match the current form section.
 
@@ -50,11 +52,11 @@ Availability can change between requests, including for models that passed. See 
 - Answers are cached per question element, title, description, type, and options. Form changes refresh the overlay even when the number of questions stays the same. Responses arriving after navigation are cached for their original question.
 - Optional Gemini fallback tries later entries in the shared allowlist on HTTP 404, 429, 503, or a request timeout. It does not change your saved model. A selected model near the end of the list has fewer fallback candidates. Connection testing always checks only the selected model.
 - **Successful answers** counts completed, parsed answer responses across tabs. It persists until manually reset and excludes connection tests and failed requests. It is not a provider usage meter or quota: failed requests and retries may still consume provider resources. The extension makes no fixed daily-quota claims.
-- The overlay uses Shadow DOM for style isolation and moves inside the fullscreen element when fullscreen changes. Text answers are copied manually, and forms are never submitted automatically.
+- The overlay uses Shadow DOM for style isolation and moves inside the fullscreen element when fullscreen changes. Text answers can be copied manually or entered by **Answer & fill all**. Forms are never submitted automatically.
 
 ## Data and permissions
 
-The API key and settings are stored in `chrome.storage.local`; the extension does not implement encryption for the key. Each answer request sends the selected question's title, description (when detected), and text options to the chosen provider. Enabling auto-solve sends requests as the active question changes. There is no application server in this repository.
+The API key and settings are stored in `chrome.storage.local`; the extension does not implement encryption for the key. Each answer request sends the selected question's title, description (when detected), and text options to the chosen provider. Enabling auto-solve sends requests as the active question changes. **Answer & fill all** sends sequential requests for uncached questions in the current section and applies the results. There is no application server in this repository.
 
 The manifest declares `storage` and `activeTab` permissions, plus host access to Google Forms and the Gemini and OpenAI API domains. The content script runs on matching `docs.google.com/forms/*` pages. Only use the extension with form content you are authorized to share with the selected provider.
 
