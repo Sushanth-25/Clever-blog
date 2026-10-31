@@ -5,7 +5,7 @@ const vm = require('node:vm');
 const path = require('node:path');
 const root = path.join(__dirname, '..');
 
-function worker(fetchResponse) {
+function worker(fetchResponse, environment = 'chrome') {
   const store = { apiKey: 'fake-test-key', provider: 'gemini', model: 'gemini-3.5-flash-lite', sessionRequests: 0 };
   const calls = [];
   let listener;
@@ -19,9 +19,18 @@ function worker(fetchResponse) {
       calls.push({ url, headers: args.headers, body: JSON.parse(args.body) });
       return fetchResponse ? fetchResponse(calls.at(-1), calls.length) : gemini('1.5');
     },
-    importScripts(file) { vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), context); }
+    importScripts(...files) {
+      for (const file of files) vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), context);
+    }
   });
-  vm.runInContext(fs.readFileSync(path.join(root, 'background.js'), 'utf8'), context);
+  if (environment === 'firefox') {
+    context.browser = context.chrome;
+    delete context.chrome;
+    delete context.importScripts;
+    for (const file of ['models.js', 'background.js']) vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), context);
+  } else {
+    vm.runInContext(fs.readFileSync(path.join(root, 'background-worker.js'), 'utf8'), context);
+  }
   return { store, calls, run: code => vm.runInContext(code, context), message: data => new Promise(resolve => listener(data, {}, resolve)) };
 }
 function gemini(text, extraParts = []) {
@@ -35,6 +44,15 @@ test('exact numeric and punctuated option labels survive cleanup', () => {
     assert.equal(app.run(`cleanExtractedAnswer(${JSON.stringify(answer)}, [${JSON.stringify(answer)}, "other"])`), answer);
   }
   assert.equal(app.run('cleanExtractedAnswer("1.5", [])'), '1.5');
+});
+test('Firefox event page starts without importScripts and handles message responses', async () => {
+  const app = worker(undefined, 'firefox');
+  const result = await app.message({ action: 'GET_ANSWER', data: question });
+  assert.equal(result.success, true);
+  assert.equal(result.answer, '1.5');
+  assert.equal(app.store.sessionRequests, 1);
+  assert.equal((await app.message({ action: 'RESET_SESSION_COUNT' })).success, true);
+  assert.equal(app.store.sessionRequests, 0);
 });
 test('matching rejects partial and ambiguous option labels', () => {
   const app = worker();

@@ -1,5 +1,6 @@
 {
   "manifest_version": 3,
+  "minimum_chrome_version": "121",
   "name": "Google Forms AI Assistant",
   "version": "1.0.0",
   "description": "Real-time AI assistant for Google Forms. Scrapes questions and options, queries LLM APIs, and renders precise answers in a sleek floating overlay.",
@@ -23,7 +24,17 @@
     }
   },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background-worker.js",
+    "scripts": ["models.js", "background.js"]
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "@clever-blog.sushanth-25",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": ["websiteContent", "authenticationInfo"]
+      }
+    }
   },
   "content_scripts": [
     {
